@@ -1,0 +1,5 @@
+{
+  "name": "隱語 - 零寬度字元隱寫工具",
+  "description": "一個基於零寬度字元的隱寫術工具，可將秘密訊息隱藏在普通文字中。",
+  "requestFramePermissions": []
+}
