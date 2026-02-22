@@ -9,73 +9,65 @@ import { motion, AnimatePresence } from 'motion/react';
 
 // Zero-width characters mapping
 // 0 -> \u200B (Zero Width Space)
-// 1 -> \u200C (Zero Width Non-Joiner)
-const ZW_ZERO = '\u200B';
-const ZW_ONE = '\u200C';
+// Robust Zero-width characters mapping for Android/iOS compatibility
+// \u200C (ZWNJ) and \u200D (ZWJ) are more likely to be preserved by clipboards
+const ZW_ZERO = '\u200C';
+const ZW_ONE = '\u200D';
+const ZW_START = '\u2060'; // Word Joiner as start marker
+const ZW_END = '\uFEFF';   // Zero Width No-Break Space as end marker
 
 declare const CryptoJS: any;
 
 const SHORTCUT_SCRIPT = `/**
- * iOS Shortcuts Steganography Script (Self-Sufficient)
- * This script uses XOR encryption with a 4-digit PIN.
+ * iOS Shortcuts Steganography Script (Robust Edition)
+ * Uses ZWNJ/ZWJ and Interleaving for Android/iOS compatibility.
  */
-const input = args.shortcutParameter || ""; // Get input from Shortcuts
-const ZW_ZERO = '\\u200B';
-const ZW_ONE = '\\u200C';
-const hasZW = new RegExp(\`[\${ZW_ZERO}\${ZW_ONE}]\`).test(input);
+const input = args.shortcutParameter || "";
+const ZW_ZERO = '\\u200C';
+const ZW_ONE = '\\u200D';
+const ZW_START = '\\u2060';
+const ZW_END = '\\uFEFF';
+
+const hasZW = input.includes(ZW_START);
 
 if (!hasZW) {
-  // --- Encryption Mode ---
   const secret = prompt("輸入秘密訊息：");
   const pin = prompt("輸入 4 位 PIN 碼：");
   if (!secret || !pin || pin.length !== 4) {
-    alert("輸入無效，請確保 PIN 為 4 位數字");
-    completion();
-  } else {
-    // Simple XOR Encryption
-    const encrypted = Array.from(secret).map((c, i) => 
-      String.fromCharCode(c.charCodeAt(0) ^ pin.charCodeAt(i % 4))
-    ).join('');
-
-    // To Binary (16-bit for Unicode support)
-    const binary = Array.from(encrypted).map(c => 
-      c.charCodeAt(0).toString(2).padStart(16, '0')
-    ).join('');
-
-    // To Zero-Width
-    const zw = Array.from(binary).map(b => b === '0' ? ZW_ZERO : ZW_ONE).join('');
-    
-    const result = input + zw;
-    completion(result); // Return to Shortcuts
-  }
-} else {
-  // --- Decryption Mode ---
-  const pin = prompt("輸入 4 位 PIN 碼：");
-  if (!pin || pin.length !== 4) {
     alert("輸入無效");
     completion();
   } else {
-    const zwMatches = input.match(new RegExp(\`[\${ZW_ZERO}\${ZW_ONE}]\`, 'g'));
-    if (!zwMatches) {
-      alert("找不到隱藏訊息");
-      completion();
-    } else {
-      const binary = zwMatches.map(z => z === ZW_ZERO ? '0' : '1').join('');
-      
-      // Binary to Text
-      let encrypted = "";
-      for (let i = 0; i < binary.length; i += 16) {
-        encrypted += String.fromCharCode(parseInt(binary.substr(i, 16), 2));
-      }
-
-      // XOR Decrypt
-      const decrypted = Array.from(encrypted).map((c, i) => 
-        String.fromCharCode(c.charCodeAt(0) ^ pin.charCodeAt(i % 4))
-      ).join('');
-
-      alert("解密結果：\\n" + decrypted);
-      completion(decrypted);
+    const encrypted = Array.from(secret).map((c, i) => 
+      String.fromCharCode(c.charCodeAt(0) ^ pin.charCodeAt(i % 4))
+    ).join('');
+    const binary = Array.from(encrypted).map(c => 
+      c.charCodeAt(0).toString(2).padStart(16, '0')
+    ).join('');
+    const zw = ZW_START + Array.from(binary).map(b => b === '0' ? ZW_ZERO : ZW_ONE).join('') + ZW_END;
+    
+    // Interleave: Insert ZW string into the cover text
+    const result = input.length > 0 ? input[0] + zw + input.slice(1) : zw;
+    completion(result);
+  }
+} else {
+  const pin = prompt("輸入 4 位 PIN 碼：");
+  const startIdx = input.indexOf(ZW_START);
+  const endIdx = input.indexOf(ZW_END);
+  if (startIdx === -1 || endIdx === -1) {
+    alert("找不到完整訊息");
+    completion();
+  } else {
+    const zwContent = input.substring(startIdx + 1, endIdx);
+    const binary = Array.from(zwContent).map(z => z === ZW_ZERO ? '0' : '1').join('');
+    let encrypted = "";
+    for (let i = 0; i < binary.length; i += 16) {
+      encrypted += String.fromCharCode(parseInt(binary.substr(i, 16), 2));
     }
+    const decrypted = Array.from(encrypted).map((c, i) => 
+      String.fromCharCode(c.charCodeAt(0) ^ pin.charCodeAt(i % 4))
+    ).join('');
+    alert("解密結果：\\n" + decrypted);
+    completion(decrypted);
   }
 }`;
 
@@ -126,18 +118,19 @@ export default function App() {
 
     try {
       setError('');
-      // Step 1: AES Encrypt the secret message with PIN
       const encrypted = CryptoJS.AES.encrypt(secretMessage, encryptPin).toString();
-      
-      // Step 2: Convert encrypted string to binary
       const binary = textToBinary(encrypted);
-      
-      // Step 3: Map to zero-width characters
-      const hiddenChars = Array.from(binary)
+      const hiddenChars = ZW_START + Array.from(binary)
         .map(bit => (bit === '0' ? ZW_ZERO : ZW_ONE))
-        .join('');
+        .join('') + ZW_END;
       
-      setResultText(coverText + hiddenChars);
+      // Robust Interleaving: Insert the hidden string after the first character of cover text
+      // This prevents "trim" functions from stripping it.
+      const result = coverText.length > 0 
+        ? coverText[0] + hiddenChars + coverText.slice(1)
+        : hiddenChars;
+        
+      setResultText(result);
     } catch (e) {
       setError('加密過程發生錯誤');
     }
@@ -155,25 +148,30 @@ export default function App() {
     }
 
     setError('');
-    const regex = new RegExp(`[${ZW_ZERO}${ZW_ONE}]`, 'g');
-    const matches = inputText.match(regex);
+    
+    // Extract using markers
+    const startIdx = inputText.indexOf(ZW_START);
+    const endIdx = inputText.indexOf(ZW_END);
 
-    if (!matches) {
-      setError('找不到隱藏的秘密訊息');
+    if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
+      setError('找不到完整或有效的隱藏訊息');
       setResultText('');
       return;
     }
 
-    // Step 1: Extract zero-width characters and convert to binary
-    const binary = matches
+    const zwContent = inputText.substring(startIdx + 1, endIdx);
+    const binary = Array.from(zwContent)
+      .filter(char => char === ZW_ZERO || char === ZW_ONE)
       .map(char => (char === ZW_ZERO ? '0' : '1'))
       .join('');
     
+    if (binary.length === 0) {
+      setError('隱藏訊息內容為空');
+      return;
+    }
+
     try {
-      // Step 2: Convert binary back to encrypted string
       const encryptedText = binaryToText(binary);
-      
-      // Step 3: AES Decrypt with PIN
       const bytes = CryptoJS.AES.decrypt(encryptedText, decryptPin);
       const originalText = bytes.toString(CryptoJS.enc.Utf8);
       
@@ -183,7 +181,7 @@ export default function App() {
       
       setResultText(originalText);
     } catch (e) {
-      setError('密碼錯誤，無法還原訊息');
+      setError('密碼錯誤，或訊息在傳輸中損壞');
       setResultText('');
     }
   };
